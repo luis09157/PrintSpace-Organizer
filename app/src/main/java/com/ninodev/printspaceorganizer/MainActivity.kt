@@ -2,17 +2,16 @@ package com.ninodev.printspaceorganizer
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Picture
 import android.os.Bundle
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import com.caverock.androidsvg.SVG
-import org.w3c.dom.Element
-import org.xml.sax.InputSource
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.io.StringReader
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
@@ -21,33 +20,64 @@ import java.io.StringWriter
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var canvasBitmap: Bitmap
+    private lateinit var svgBitmap: Bitmap
+    private lateinit var canvas: Canvas
+    private lateinit var imageView: ImageView
+
+    private var scaleFactor = 1.0f
+    private var scaleGestureDetector: ScaleGestureDetector? = null
+    private var offsetX = 0f
+    private var offsetY = 0f
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        imageView = ImageView(this)
 
-        // Crear un lienzo con las dimensiones deseadas
-        val bitmap = Bitmap.createBitmap(2000, 2000, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+        // Obtener dimensiones de la pantalla
+        val displayMetrics = DisplayMetrics()
+        windowManager.defaultDisplay.getMetrics(displayMetrics)
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+
+        // Calcular el tamaño del bitmap del SVG en función de las dimensiones físicas requeridas (90x60 cm)
+        val targetWidthCm = 90f
+        val targetHeightCm = 60f
+        val targetDensity = displayMetrics.densityDpi.toFloat()
+        val targetWidthPx = (targetWidthCm / 2.54f * targetDensity).toInt()
+        val targetHeightPx = (targetHeightCm / 2.54f * targetDensity).toInt()
+
+        // Crear un bitmap para el lienzo y su canvas
+        canvasBitmap = Bitmap.createBitmap(screenWidth, screenHeight, Bitmap.Config.ARGB_8888)
+        canvas = Canvas(canvasBitmap)
         canvas.drawColor(Color.WHITE) // Opcional: Establecer el fondo del lienzo a blanco
 
-        // Leer el archivo SVG desde los recursos como cadena
-        val svgString = readSvgFromResource(R.raw.nube)
+        // Crear un bitmap del SVG renderizado
+        val svgString = readSvgFromResource(R.raw.prueba2)
         Log.d("SVGDebug", "Original SVG String: $svgString")
+        svgBitmap = renderSvgToBitmap(svgString, targetWidthPx, targetHeightPx)
+        Log.d("SVGDebug", "SVG rendered to bitmap")
 
-        // Manipular el SVG
-        val manipulatedSvgString = manipulateSvg(svgString)
-        Log.d("SVGDebug", "Manipulated SVG String: $manipulatedSvgString")
+        // Calcular el factor de escala inicial para que el bitmap SVG se ajuste a la pantalla
+        scaleFactor = screenWidth.toFloat() / targetWidthPx.toFloat()
+        scaleFactor = scaleFactor.coerceAtMost(screenHeight.toFloat() / targetHeightPx.toFloat())
 
-        // Crear un nuevo SVG desde la cadena manipulada
-        val newSvg = SVG.getFromString(manipulatedSvgString)
-        Log.d("SVGDebug", "SVG created from manipulated string")
+        // Dibujar el bitmap del SVG en el canvas con el factor de escala inicial
+        canvas.save()
+        canvas.scale(scaleFactor, scaleFactor)
+        canvas.drawBitmap(svgBitmap, 0f, 0f, null)
+        canvas.restore()
 
-        // Renderizar el SVG en el lienzo
-        newSvg.renderToCanvas(canvas)
+        // Configurar la vista de imagen
+        imageView.setImageBitmap(canvasBitmap)
+        imageView.setOnTouchListener { _, event ->
+            onTouchEvent(event)
+        }
 
-        // Ahora puedes usar el bitmap donde desees, como establecerlo en una ImageView o en otro lugar
-        // Por ejemplo, podrías crear una ImageView y establecer el bitmap en ella
-        val imageView = ImageView(this)
-        imageView.setImageBitmap(bitmap)
+        // Inicializar detector de gestos de escala
+        scaleGestureDetector = ScaleGestureDetector(this, ScaleListener())
 
         // Establecer la vista de imagen como la vista de contenido
         setContentView(imageView)
@@ -62,35 +92,59 @@ class MainActivity : AppCompatActivity() {
         return svgString
     }
 
-    private fun manipulateSvg(svgString: String): String {
-        try {
-            // Parsear el SVG con DocumentBuilder
-            val factory = DocumentBuilderFactory.newInstance()
-            val builder = factory.newDocumentBuilder()
-            val doc = builder.parse(InputSource(StringReader(svgString)))
+    private fun renderSvgToBitmap(svgString: String, width: Int, height: Int): Bitmap {
+        val svg = SVG.getFromString(svgString)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        svg.renderToCanvas(canvas)
+        return bitmap
+    }
 
-            // Obtener el elemento que deseas manipular
-            val elements = doc.getElementsByTagName("path") // ejemplo para elementos <path>
-            for (i in 0 until elements.length) {
-                val element = elements.item(i) as Element
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        scaleGestureDetector?.onTouchEvent(event)
 
-                // Modificar los atributos del elemento
-                // Ejemplo: mover el elemento cambiando los atributos de transformación
-                val transform = element.getAttribute("transform")
-                element.setAttribute("transform", "$transform translate(0,0) scale(2) rotate(0)")
+        val action = event.action
+        when (action) {
+            MotionEvent.ACTION_DOWN -> {
+                lastTouchX = event.x
+                lastTouchY = event.y
             }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - lastTouchX
+                val dy = event.y - lastTouchY
 
-            // Convertir el documento XML de nuevo a cadena
-            val transformerFactory = TransformerFactory.newInstance()
-            val transformer = transformerFactory.newTransformer()
-            val result = StreamResult(StringWriter())
-            val source = DOMSource(doc)
-            transformer.transform(source, result)
-            Log.d("SVGDebug", "SVG manipulated successfully")
-            return result.writer.toString()
-        } catch (e: Exception) {
-            Log.e("SVGDebug", "Error manipulating SVG", e)
-            return svgString
+                offsetX += dx
+                offsetY += dy
+
+                lastTouchX = event.x
+                lastTouchY = event.y
+
+                invalidateCanvas()
+            }
+        }
+        return true
+    }
+
+    private fun invalidateCanvas() {
+        canvas.save()
+        canvas.translate(offsetX, offsetY)
+        canvas.scale(scaleFactor, scaleFactor)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawBitmap(svgBitmap, 0f, 0f, null)
+        canvas.restore()
+        imageView.setImageBitmap(canvasBitmap)
+    }
+
+    private inner class ScaleListener : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            scaleFactor *= detector.scaleFactor
+            scaleFactor = scaleFactor.coerceIn(0.1f, 10.0f) // Limitar el factor de escala
+
+            invalidateCanvas()
+            return true
         }
     }
 }
+
+
+
